@@ -55,7 +55,20 @@ def build(fc_layers_config,
                                     num_final_classes=num_final_classes,
                                     box_rep=box_rep,
                                     is_training=is_training)
-
+              
+    elif fusion_type == 'dense':
+        cls_logits, offsets, angle_vectors = \
+            _dense_fusion_fc_layers(num_layers=num_layers,
+                                    layer_sizes=layer_sizes,
+                                    input_rois=input_rois,
+                                    input_weights=input_weights,
+                                    fusion_method=fusion_method,
+                                    l2_weight_decay=l2_weight_decay,
+                                    keep_prob=keep_prob,
+                                    num_final_classes=num_final_classes,
+                                    box_rep=box_rep,
+                                    is_training=is_training)
+    
     elif fusion_type == 'late':
         cls_logits, offsets, angle_vectors = \
             _late_fusion_fc_layers(num_layers=num_layers,
@@ -191,6 +204,55 @@ def _early_fusion_fc_layers(num_layers, layer_sizes,
 
             fc_name_idx += 1
         """
+        output_layers = build_output_layers(fc_drop,
+                                            num_final_classes,
+                                            box_rep)
+    return output_layers
+
+
+#D-Fusion
+def _dense_fusion_fc_layers(num_layers, layer_sizes,
+                            input_rois, input_weights, fusion_method,
+                            l2_weight_decay, keep_prob,
+                            num_final_classes, box_rep,
+                            is_training):
+
+    if not num_layers == len(layer_sizes):
+        raise ValueError('num_layers does not match length of layer_sizes')
+
+    if l2_weight_decay > 0:
+        weights_regularizer = slim.l2_regularizer(l2_weight_decay)
+    else:
+        weights_regularizer = None
+
+    # Feature fusion
+    fused_features = avod_fc_layer_utils.feature_fusion(fusion_method,
+                                                        input_rois,
+                                                        input_weights)
+
+    # Flatten
+    fc_drop = slim.flatten(fused_features)
+
+    with slim.arg_scope(
+            [slim.fully_connected],
+            weights_regularizer=weights_regularizer):
+
+        #D-Fusion
+        fc_name_idx = 6
+        fc_layer_1 = slim.fully_connected(fc_drop, layer_sizes[0], scope='fc{}'.format(fc_name_idx))
+        fc_drop_1 = slim.dropout(fc_layer_1, keep_prob=keep_prob, is_training=is_training, scope='fc{}_drop'.format(fc_name_idx))
+        
+        fc_name_idx = 7
+        fc_layer_2 = slim.fully_connected(fc_drop_1, layer_sizes[1], scope='fc{}'.format(fc_name_idx))
+        fc_drop_2 = slim.dropout(fc_layer_2, keep_prob=keep_prob, is_training=is_training, scope='fc{}_drop'.format(fc_name_idx))
+        fc_drop_2 = fc_drop_2 + fc_drop_1
+        
+        fc_name_idx = 8
+        fc_layer_3 = slim.fully_connected(fc_drop_2, layer_sizes[0], scope='fc{}'.format(fc_name_idx))
+        fc_drop_3 = slim.dropout(fc_layer_3, keep_prob=keep_prob, is_training=is_training,
+                                 scope='fc{}_drop'.format(fc_name_idx))
+        fc_drop = fc_drop_3 + fc_drop_2 + fc_drop_1
+                      
         output_layers = build_output_layers(fc_drop,
                                             num_final_classes,
                                             box_rep)
